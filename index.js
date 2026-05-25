@@ -298,6 +298,145 @@ app.patch('/api/workouts/:id/exercise', auth, wrap(async (req, res) => {
   res.json(mapWorkout(updated.rows[0]));
 }));
 
+// ── Exercises ────────────────────────────────────────────────────────────────
+
+app.get('/api/exercises', auth, wrap(async (req, res) => {
+  const result = await db.query('SELECT id, name, muscle_group FROM exercises ORDER BY name ASC');
+  res.json(result.rows);
+}));
+
+// ── New Template Routines (Normalized) ───────────────────────────────────────
+
+const mapTemplate = (r, exercises = []) => ({
+  id: r.id,
+  userId: r.user_id,
+  name: r.name,
+  exercises: exercises.map(ex => ({
+    id: ex.id,
+    templateId: ex.template_id,
+    exerciseId: ex.exercise_id,
+    exerciseName: ex.exercise_name,
+    muscleGroup: ex.muscle_group,
+    sets: ex.sets,
+    reps: ex.reps,
+    orderIndex: ex.order_index
+  }))
+});
+
+app.get('/api/templates', auth, wrap(async (req, res) => {
+  const templatesRes = await db.query(
+    'SELECT * FROM templates WHERE user_id = $1 ORDER BY created_at DESC',
+    [req.user.userId]
+  );
+  
+  if (templatesRes.rows.length === 0) return res.json([]);
+
+  const templateIds = templatesRes.rows.map(t => t.id);
+  const exercisesRes = await db.query(
+    `SELECT te.*, e.name as exercise_name, e.muscle_group 
+     FROM template_exercises te
+     JOIN exercises e ON te.exercise_id = e.id
+     WHERE te.template_id = ANY($1)
+     ORDER BY te.order_index ASC`,
+    [templateIds]
+  );
+
+  const templates = templatesRes.rows.map(t => {
+    const exList = exercisesRes.rows.filter(ex => ex.template_id === t.id);
+    return mapTemplate(t, exList);
+  });
+
+  res.json(templates);
+}));
+
+app.post('/api/templates', auth, wrap(async (req, res) => {
+  const { name, exercises } = req.body || {};
+  if (!name) return res.status(400).json({ error: 'Name is required' });
+
+  await db.query('BEGIN');
+  try {
+    const tRes = await db.query(
+      'INSERT INTO templates (user_id, name) VALUES ($1, $2) RETURNING *',
+      [req.user.userId, name]
+    );
+    const template = tRes.rows[0];
+
+    let exList = [];
+    if (Array.isArray(exercises) && exercises.length > 0) {
+      for (let i = 0; i < exercises.length; i++) {
+        const ex = exercises[i];
+        const teRes = await db.query(
+          `INSERT INTO template_exercises (template_id, exercise_id, sets, reps, order_index)
+           VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+          [template.id, ex.exerciseId, ex.sets || 3, ex.reps || 10, i]
+        );
+        
+        // Fetch exercise name
+        const eRes = await db.query('SELECT name, muscle_group FROM exercises WHERE id = $1', [ex.exerciseId]);
+        exList.push({
+          ...teRes.rows[0],
+          exercise_name: eRes.rows[0].name,
+          muscle_group: eRes.rows[0].muscle_group
+        });
+      }
+    }
+    
+    await db.query('COMMIT');
+    res.json(mapTemplate(template, exList));
+  } catch (err) {
+    await db.query('ROLLBACK');
+    throw err;
+  }
+}));
+
+app.put('/api/templates/:id', auth, wrap(async (req, res) => {
+  const { name, exercises } = req.body || {};
+  const tId = req.params.id;
+
+  // Ensure template exists and belongs to user
+  const check = await db.query('SELECT id FROM templates WHERE id = $1 AND user_id = $2', [tId, req.user.userId]);
+  if (!check.rows[0]) return res.status(404).json({ error: 'Template not found' });
+
+  await db.query('BEGIN');
+  try {
+    const tRes = await db.query(
+      'UPDATE templates SET name = $1 WHERE id = $2 RETURNING *',
+      [name || 'Untitled', tId]
+    );
+
+    await db.query('DELETE FROM template_exercises WHERE template_id = $1', [tId]);
+
+    let exList = [];
+    if (Array.isArray(exercises)) {
+      for (let i = 0; i < exercises.length; i++) {
+        const ex = exercises[i];
+        const teRes = await db.query(
+          `INSERT INTO template_exercises (template_id, exercise_id, sets, reps, order_index)
+           VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+          [tId, ex.exerciseId, ex.sets || 3, ex.reps || 10, i]
+        );
+        const eRes = await db.query('SELECT name, muscle_group FROM exercises WHERE id = $1', [ex.exerciseId]);
+        exList.push({
+          ...teRes.rows[0],
+          exercise_name: eRes.rows[0].name,
+          muscle_group: eRes.rows[0].muscle_group
+        });
+      }
+    }
+
+    await db.query('COMMIT');
+    res.json(mapTemplate(tRes.rows[0], exList));
+  } catch (err) {
+    await db.query('ROLLBACK');
+    throw err;
+  }
+}));
+
+app.delete('/api/templates/:id', auth, wrap(async (req, res) => {
+  await db.query('DELETE FROM templates WHERE id = $1 AND user_id = $2', [req.params.id, req.user.userId]);
+  res.json({ ok: true });
+}));
+
 // ── Workout logs (completed sessions) ────────────────────────────────────────
 
 app.get('/api/logs', auth, wrap(async (req, res) => {

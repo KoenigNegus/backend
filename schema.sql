@@ -107,3 +107,94 @@ CREATE INDEX IF NOT EXISTS idx_logs_user      ON workout_logs(user_id, performed
 CREATE INDEX IF NOT EXISTS idx_meals_user     ON meals(user_id, logged_at);
 CREATE INDEX IF NOT EXISTS idx_chat_user      ON chat_messages(user_id, sent_at);
 CREATE INDEX IF NOT EXISTS idx_summaries_user ON weekly_summaries(user_id, week_start);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Phase 1: Core Gym Suite Extensions
+-- ─────────────────────────────────────────────────────────────────────────────
+
+-- Catalog of all exercises ----------------------------------------------------
+CREATE TABLE IF NOT EXISTS exercises (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name         TEXT UNIQUE NOT NULL,
+  muscle_group TEXT NOT NULL,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Template Routines -----------------------------------------------------------
+CREATE TABLE IF NOT EXISTS templates (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id      UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name         TEXT NOT NULL,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS template_exercises (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  template_id  UUID NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
+  exercise_id  UUID NOT NULL REFERENCES exercises(id) ON DELETE CASCADE,
+  sets         INT NOT NULL DEFAULT 3,
+  reps         INT NOT NULL DEFAULT 10,
+  order_index  INT NOT NULL DEFAULT 0,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Seeding Exercises -----------------------------------------------------------
+INSERT INTO exercises (name, muscle_group) VALUES
+  -- Chest
+  ('Barbell Bench Press', 'Chest'),
+  ('Incline Dumbbell Press', 'Chest'),
+  ('Cable Crossover', 'Chest'),
+  ('Push-ups', 'Chest'),
+  ('Dumbbell Flyes', 'Chest'),
+  ('Machine Chest Press', 'Chest'),
+  ('Decline Bench Press', 'Chest'),
+  -- Back
+  ('Pull-ups', 'Back'),
+  ('Lat Pulldown', 'Back'),
+  ('Barbell Row', 'Back'),
+  ('Seated Cable Row', 'Back'),
+  ('T-Bar Row', 'Back'),
+  ('Single-Arm Dumbbell Row', 'Back'),
+  ('Deadlift', 'Back'),
+  -- Shoulders
+  ('Overhead Press', 'Shoulders'),
+  ('Dumbbell Lateral Raise', 'Shoulders'),
+  ('Front Raise', 'Shoulders'),
+  ('Face Pulls', 'Shoulders'),
+  ('Arnold Press', 'Shoulders'),
+  ('Upright Row', 'Shoulders'),
+  ('Reverse Pec Deck', 'Shoulders'),
+  -- Legs
+  ('Barbell Squat', 'Legs'),
+  ('Leg Press', 'Legs'),
+  ('Romanian Deadlift', 'Legs'),
+  ('Leg Extension', 'Legs'),
+  ('Lying Leg Curl', 'Legs'),
+  ('Standing Calf Raise', 'Legs'),
+  ('Seated Calf Raise', 'Legs'),
+  ('Walking Lunges', 'Legs'),
+  ('Bulgarian Split Squat', 'Legs'),
+  -- Arms
+  ('Barbell Curl', 'Arms'),
+  ('Dumbbell Hammer Curl', 'Arms'),
+  ('Preacher Curl', 'Arms'),
+  ('Triceps Pushdown', 'Arms'),
+  ('Overhead Triceps Extension', 'Arms'),
+  ('Skull Crushers', 'Arms'),
+  ('Concentration Curl', 'Arms'),
+  -- Core
+  ('Crunch', 'Core'),
+  ('Plank', 'Core'),
+  ('Hanging Leg Raise', 'Core'),
+  ('Russian Twist', 'Core'),
+  ('Ab Wheel Rollout', 'Core'),
+  -- Athletic & Explosive (User Request)
+  ('Power Clean', 'Athletic'),
+  ('Box Jumps', 'Athletic'),
+  ('80m Sprint', 'Athletic'),
+  ('100m Sprint', 'Athletic'),
+  ('Plyo Push-ups', 'Athletic'),
+  ('Kettlebell Swings', 'Athletic'),
+  ('Medicine Ball Slams', 'Athletic'),
+  ('Sled Push', 'Athletic')
+ON CONFLICT (name) DO NOTHING;
