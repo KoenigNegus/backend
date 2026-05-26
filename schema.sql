@@ -196,5 +196,52 @@ INSERT INTO exercises (name, muscle_group) VALUES
   ('Plyo Push-ups', 'Athletic'),
   ('Kettlebell Swings', 'Athletic'),
   ('Medicine Ball Slams', 'Athletic'),
-  ('Sled Push', 'Athletic')
+  ('Sled Push', 'Athletic'),
+  -- Additional Core
+  ('Cable Woodchopper', 'Core'),
+  ('Bicycle Crunches', 'Core'),
+  ('V-Ups', 'Core'),
+  ('Flutter Kicks', 'Core'),
+  ('Hanging Knee Raise', 'Core'),
+  ('Dragon Flag', 'Core'),
+  -- Additional Legs
+  ('Goblet Squat', 'Legs'),
+  ('Front Squat', 'Legs'),
+  ('Hack Squat', 'Legs'),
+  ('Sumo Deadlift', 'Legs'),
+  ('Hip Thrust', 'Legs'),
+  ('Glute Bridge', 'Legs'),
+  ('Seated Leg Curl', 'Legs'),
+  ('Sissy Squat', 'Legs'),
+  -- Additional Back
+  ('Close-Grip Pulldown', 'Back'),
+  ('Straight-Arm Pulldown', 'Back'),
+  ('Chest-Supported Row', 'Back'),
+  ('Pendlay Row', 'Back'),
+  ('Meadows Row', 'Back'),
+  ('Rack Pull', 'Back'),
+  ('Good Morning', 'Back'),
+  -- Additional Chest
+  ('Dumbbell Bench Press', 'Chest'),
+  ('Incline Barbell Press', 'Chest'),
+  ('Decline Dumbbell Press', 'Chest'),
+  ('Pec Deck Machine', 'Chest'),
+  ('Floor Press', 'Chest'),
+  ('Dips (Chest Focus)', 'Chest'),
+  -- Additional Shoulders
+  ('Seated Dumbbell Press', 'Shoulders'),
+  ('Machine Shoulder Press', 'Shoulders'),
+  ('Cable Lateral Raise', 'Shoulders'),
+  ('Leaning Lateral Raise', 'Shoulders'),
+  ('Rear Delt Fly', 'Shoulders'),
+  ('Push Press', 'Shoulders'),
+  -- Additional Arms
+  ('EZ-Bar Curl', 'Arms'),
+  ('Incline Dumbbell Curl', 'Arms'),
+  ('Cable Curl', 'Arms'),
+  ('Reverse Curl', 'Arms'),
+  ('Close-Grip Bench Press', 'Arms'),
+  ('Triceps Dip', 'Arms'),
+  ('Rope Pushdown', 'Arms'),
+  ('Overhead Cable Extension', 'Arms')
 ON CONFLICT (name) DO NOTHING;

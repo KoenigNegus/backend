@@ -305,6 +305,17 @@ app.get('/api/exercises', auth, wrap(async (req, res) => {
   res.json(result.rows);
 }));
 
+app.post('/api/exercises', auth, wrap(async (req, res) => {
+  const { name, muscle_group } = req.body;
+  if (!name) return res.status(400).json({ error: 'Exercise name is required' });
+  
+  const result = await db.query(
+    'INSERT INTO exercises (name, muscle_group) VALUES ($1, $2) ON CONFLICT (name) DO UPDATE SET muscle_group = EXCLUDED.muscle_group RETURNING id, name, muscle_group',
+    [name, muscle_group || 'Custom']
+  );
+  res.json(result.rows[0]);
+}));
+
 // ── New Template Routines (Normalized) ───────────────────────────────────────
 
 const mapTemplate = (r, exercises = []) => ({
