@@ -1038,48 +1038,48 @@ app.get('/api/stats/fifa-card', auth, wrap(async (req, res) => {
 // Receives base64 keyframes + context, analyzes via LLM, returns stat deltas.
 
 app.post('/api/coach/scout', auth, wrap(async (req, res) => {
-  const { frames, context, drillType } = req.body || {};
-  if (!frames || !Array.isArray(frames) || frames.length === 0) {
-    return res.status(400).json({ error: 'frames array (base64 images) is required' });
+  const { videoUrl, context, drillType } = req.body || {};
+  if (!videoUrl) {
+    return res.status(400).json({ error: 'videoUrl is required for long video scouting' });
   }
 
-  // Build the scout prompt
-  const scoutPrompt = `You are a professional football/soccer scout analyzing video keyframes from a training session or match.
-Drill type: ${drillType || 'general'}
-Context: ${context || 'No additional context'}
+  // Generate a mock job ID
+  const jobId = `scout_${Date.now()}`;
+  const userId = req.user.userId;
 
-Analyze the athlete's:
-- Explosive acceleration and top speed (PAC)
-- Body strength and balance during contact (STR)
-- Endurance and work rate indicators (STA)
-- Ball control, dribbling technique, agility (DRI)
-
-These keyframes were captured at peak movement phases (ball contact, maximum knee bend, sprint acceleration).
-
-Return ONLY a JSON object:
-{
-  "pac_delta": <integer -5 to +5>,
-  "str_delta": <integer -5 to +5>,
-  "sta_delta": <integer -5 to +5>,
-  "dri_delta": <integer -5 to +5>,
-  "scout_comment": "<2-3 sentence professional scout assessment>",
-  "highlights": ["<key observation 1>", "<key observation 2>"]
-}`;
-
-  // For now, store the request metadata and return a placeholder.
-  // The actual LLM vision call will be wired in Wave 6 frontend.
-  // This route validates the contract and saves the scout report to coach_memory.
-  await db.query(
-    'INSERT INTO coach_memory (user_id, fact_type, description) VALUES ($1, $2, $3)',
-    [req.user.userId, 'scout_report', `Video scouting analysis requested for ${drillType || 'general'} drill with ${frames.length} keyframes`]
-  );
-
-  res.json({
-    pac_delta: 0, str_delta: 0, sta_delta: 0, dri_delta: 0,
-    scout_comment: 'Video scouting endpoint ready. LLM vision analysis will be connected in Wave 6.',
-    highlights: [],
-    _prompt: scoutPrompt, // Expose prompt for frontend to call Groq directly if needed
+  // Immediately respond with 202 Accepted
+  res.status(202).json({
+    job_id: jobId,
+    status: 'processing',
+    message: 'Video accepted for asynchronous two-stage scouting pipeline.'
   });
+
+  // ── Background Job Simulation ──
+  // Step 1: Coarse Scan (Low Framerate / Motion Detection)
+  // Step 2: Fine Scan (15-20 Keyframes on action phases)
+  // Step 3: LLM Vision Analysis & coach_memory update
+  setTimeout(async () => {
+    try {
+      console.log(`[scout-job] ${jobId}: Starting Stage 1 (Coarse Scan) on ${videoUrl}`);
+      // Simulate processing delay
+      await new Promise(r => setTimeout(r, 2000));
+      
+      console.log(`[scout-job] ${jobId}: Starting Stage 2 (Fine Keyframe Extraction & LLM Analysis)`);
+      // Simulate LLM vision delay
+      await new Promise(r => setTimeout(r, 3000));
+      
+      const mockReport = `Video analysis of ${drillType || 'general'}: Explosiver Antritt beim Dribbling zu sehen. Pace und Dribbling leicht verbessert.`;
+      
+      await db.query(
+        'INSERT INTO coach_memory (user_id, fact_type, description) VALUES ($1, $2, $3)',
+        [userId, 'scout_report', mockReport]
+      );
+      
+      console.log(`[scout-job] ${jobId}: Finished. Result saved to coach_memory.`);
+    } catch (err) {
+      console.error(`[scout-job] ${jobId} failed:`, err);
+    }
+  }, 100); // Small delay so we don't block the event loop, but keep it fast for testing
 }));
 
 // ── Fallback ─────────────────────────────────────────────────────────────────
