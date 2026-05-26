@@ -245,3 +245,58 @@ INSERT INTO exercises (name, muscle_group) VALUES
   ('Rope Pushdown', 'Arms'),
   ('Overhead Cable Extension', 'Arms')
 ON CONFLICT (name) DO NOTHING;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Phase 5: Liftoff Ultimate Performance Suite
+-- ─────────────────────────────────────────────────────────────────────────────
+
+-- Nutrition tracking (canonical, replaces legacy meals table) -----------------
+CREATE TABLE IF NOT EXISTS nutrition_logs (
+  id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name       TEXT NOT NULL,
+  calories   INT NOT NULL DEFAULT 0,
+  protein    NUMERIC(6,1) NOT NULL DEFAULT 0,
+  carbs      NUMERIC(6,1) NOT NULL DEFAULT 0,
+  fat        NUMERIC(6,1) NOT NULL DEFAULT 0,
+  amount     NUMERIC(7,1) NOT NULL DEFAULT 100,
+  date       DATE NOT NULL DEFAULT CURRENT_DATE,
+  image_uri  TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_nutrition_user_date ON nutrition_logs(user_id, date);
+
+-- One-time migration: copy existing meals into nutrition_logs -----------------
+-- Uses NOT EXISTS to prevent duplicating data on repeated runs.
+INSERT INTO nutrition_logs (user_id, name, calories, protein, carbs, fat, amount, date, image_uri, created_at)
+SELECT m.user_id, m.name, m.calories, m.protein_g, m.carbs_g, m.fat_g, 100, m.logged_at::date, m.image_uri, m.logged_at
+FROM meals m
+WHERE NOT EXISTS (
+  SELECT 1 FROM nutrition_logs nl
+  WHERE nl.user_id = m.user_id AND nl.name = m.name AND nl.date = m.logged_at::date AND nl.created_at = m.logged_at
+);
+
+-- Athletic performance logs (sprints, plyo, matches, cardio, tests) -----------
+CREATE TABLE IF NOT EXISTS athletic_logs (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id       UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  log_type      TEXT NOT NULL CHECK (log_type IN ('sprint', 'plyo', 'match', 'cardio', 'test', 'other')),
+  title         TEXT NOT NULL,
+  distance_m    NUMERIC(7,1),
+  time_seconds  NUMERIC(7,2),
+  rating        NUMERIC(3,1),
+  notes         TEXT,
+  performed_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_athletic_user ON athletic_logs(user_id, performed_at);
+
+-- AI Coach persistent memory ---------------------------------------------------
+CREATE TABLE IF NOT EXISTS coach_memory (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id      UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  fact_type    TEXT NOT NULL,
+  description  TEXT NOT NULL,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_coach_mem_user ON coach_memory(user_id);

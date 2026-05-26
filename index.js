@@ -121,6 +121,40 @@ const mapChat = (r) => ({
   timestamp: r.sent_at.toISOString(),
 });
 
+const mapNutritionLog = (r) => ({
+  id: r.id,
+  userId: r.user_id,
+  name: r.name,
+  calories: r.calories,
+  protein: Number(r.protein),
+  carbs: Number(r.carbs),
+  fat: Number(r.fat),
+  amount: Number(r.amount),
+  date: typeof r.date === 'string' ? r.date : r.date.toISOString().slice(0, 10),
+  imageUri: r.image_uri || undefined,
+  createdAt: r.created_at.toISOString(),
+});
+
+const mapAthleticLog = (r) => ({
+  id: r.id,
+  userId: r.user_id,
+  logType: r.log_type,
+  title: r.title,
+  distanceM: r.distance_m == null ? undefined : Number(r.distance_m),
+  timeSeconds: r.time_seconds == null ? undefined : Number(r.time_seconds),
+  rating: r.rating == null ? undefined : Number(r.rating),
+  notes: r.notes || undefined,
+  performedAt: r.performed_at.toISOString(),
+});
+
+const mapCoachMemory = (r) => ({
+  id: r.id,
+  userId: r.user_id,
+  factType: r.fact_type,
+  description: r.description,
+  createdAt: r.created_at.toISOString(),
+});
+
 // ── Health check (no auth) ───────────────────────────────────────────────────
 
 app.get('/api/health', wrap(async (req, res) => {
@@ -591,11 +625,11 @@ app.get('/api/analytics/weekly', auth, wrap(async (req, res) => {
   );
 
   const meals = await db.query(
-    `SELECT to_char(date_trunc('day', logged_at), 'YYYY-MM-DD') AS log_day,
+    `SELECT to_char(date, 'YYYY-MM-DD') AS log_day,
             SUM(calories)  AS calories,
-            SUM(protein_g) AS protein_g
-     FROM meals
-     WHERE user_id = $1 AND logged_at >= now() - interval '7 days'
+            SUM(protein) AS protein_g
+     FROM nutrition_logs
+     WHERE user_id = $1 AND date >= (CURRENT_DATE - 7)
      GROUP BY 1`,
     [userId]
   );
@@ -663,6 +697,389 @@ app.post('/api/summaries', auth, wrap(async (req, res) => {
     ]
   );
   res.json({ ok: true });
+}));
+
+// ── Nutrition Logs (replaces legacy /api/meals) ─────────────────────────────
+
+app.get('/api/nutrition', auth, wrap(async (req, res) => {
+  const date = req.query.date; // YYYY-MM-DD
+  let result;
+  if (date) {
+    result = await db.query(
+      'SELECT * FROM nutrition_logs WHERE user_id = $1 AND date = $2 ORDER BY created_at DESC',
+      [req.user.userId, date]
+    );
+  } else {
+    result = await db.query(
+      'SELECT * FROM nutrition_logs WHERE user_id = $1 ORDER BY date DESC, created_at DESC LIMIT 100',
+      [req.user.userId]
+    );
+  }
+  res.json(result.rows.map(mapNutritionLog));
+}));
+
+app.post('/api/nutrition', auth, wrap(async (req, res) => {
+  const b = req.body || {};
+  const result = await db.query(
+    `INSERT INTO nutrition_logs (user_id, name, calories, protein, carbs, fat, amount, date, image_uri)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+    [
+      req.user.userId,
+      b.name || 'Meal',
+      b.calories || 0,
+      b.protein || 0,
+      b.carbs || 0,
+      b.fat || 0,
+      b.amount || 100,
+      b.date || new Date().toISOString().slice(0, 10),
+      b.imageUri || null,
+    ]
+  );
+  res.json(mapNutritionLog(result.rows[0]));
+}));
+
+app.put('/api/nutrition/:id', auth, wrap(async (req, res) => {
+  const b = req.body || {};
+  const result = await db.query(
+    `UPDATE nutrition_logs
+     SET name = $3, calories = $4, protein = $5, carbs = $6, fat = $7, amount = $8, date = $9, image_uri = $10
+     WHERE id = $1 AND user_id = $2 RETURNING *`,
+    [
+      req.params.id,
+      req.user.userId,
+      b.name || 'Meal',
+      b.calories || 0,
+      b.protein || 0,
+      b.carbs || 0,
+      b.fat || 0,
+      b.amount || 100,
+      b.date || new Date().toISOString().slice(0, 10),
+      b.imageUri || null,
+    ]
+  );
+  if (!result.rows[0]) return res.status(404).json({ error: 'Nutrition log not found' });
+  res.json(mapNutritionLog(result.rows[0]));
+}));
+
+app.delete('/api/nutrition/:id', auth, wrap(async (req, res) => {
+  await db.query('DELETE FROM nutrition_logs WHERE id = $1 AND user_id = $2', [
+    req.params.id, req.user.userId,
+  ]);
+  res.json({ ok: true });
+}));
+
+// Daily Health Score (0–100)
+app.get('/api/nutrition/score', auth, wrap(async (req, res) => {
+  const date = req.query.date || new Date().toISOString().slice(0, 10);
+  const userId = req.user.userId;
+
+  const logsRes = await db.query(
+    'SELECT name, calories, protein, carbs, fat FROM nutrition_logs WHERE user_id = $1 AND date = $2',
+    [userId, date]
+  );
+  const profile = await db.query(
+    'SELECT calorie_goal, protein_goal FROM user_profiles WHERE user_id = $1',
+    [userId]
+  );
+  const goals = profile.rows[0] || { calorie_goal: 2500, protein_goal: 150 };
+
+  let totalCal = 0, totalPro = 0;
+  let junkCount = 0;
+  const junkKeywords = ['pizza', 'burger', 'fries', 'soda', 'chips', 'candy', 'donut', 'ice cream', 'nuggets', 'hot dog'];
+
+  for (const log of logsRes.rows) {
+    totalCal += log.calories;
+    totalPro += Number(log.protein);
+    const lower = log.name.toLowerCase();
+    if (junkKeywords.some(kw => lower.includes(kw))) junkCount++;
+  }
+
+  // Protein score (40%): how close to protein goal
+  const proteinScore = Math.min(100, (totalPro / (goals.protein_goal || 150)) * 100);
+
+  // Calorie score (40%): penalty for deviation from calorie goal
+  const calDev = Math.abs(totalCal - goals.calorie_goal) / (goals.calorie_goal || 2500);
+  const calorieScore = Math.max(0, 100 - calDev * 100);
+
+  // Quality score (20%): penalize junk food
+  const totalMeals = logsRes.rows.length || 1;
+  const qualityScore = Math.max(0, 100 - (junkCount / totalMeals) * 100);
+
+  const finalScore = Math.round(0.4 * proteinScore + 0.4 * calorieScore + 0.2 * qualityScore);
+
+  res.json({
+    score: Math.min(100, Math.max(0, finalScore)),
+    totalCalories: totalCal,
+    totalProtein: totalPro,
+    calorieGoal: goals.calorie_goal,
+    proteinGoal: goals.protein_goal,
+    mealCount: logsRes.rows.length,
+    breakdown: { proteinScore: Math.round(proteinScore), calorieScore: Math.round(calorieScore), qualityScore: Math.round(qualityScore) },
+  });
+}));
+
+// Batch sync for offline-queued nutrition logs
+app.post('/api/nutrition/sync', auth, wrap(async (req, res) => {
+  const items = req.body || [];
+  if (!Array.isArray(items)) return res.status(400).json({ error: 'Expected an array of nutrition logs' });
+
+  const results = [];
+  for (const b of items) {
+    const result = await db.query(
+      `INSERT INTO nutrition_logs (user_id, name, calories, protein, carbs, fat, amount, date, image_uri)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       ON CONFLICT DO NOTHING RETURNING *`,
+      [
+        req.user.userId,
+        b.name || 'Meal',
+        b.calories || 0,
+        b.protein || 0,
+        b.carbs || 0,
+        b.fat || 0,
+        b.amount || 100,
+        b.date || new Date().toISOString().slice(0, 10),
+        b.imageUri || null,
+      ]
+    );
+    if (result.rows[0]) results.push(mapNutritionLog(result.rows[0]));
+  }
+  res.json({ synced: results.length, items: results });
+}));
+
+// ── Athletic Logs ────────────────────────────────────────────────────────────
+
+app.get('/api/athletic', auth, wrap(async (req, res) => {
+  const result = await db.query(
+    'SELECT * FROM athletic_logs WHERE user_id = $1 ORDER BY performed_at DESC LIMIT 100',
+    [req.user.userId]
+  );
+  res.json(result.rows.map(mapAthleticLog));
+}));
+
+app.post('/api/athletic', auth, wrap(async (req, res) => {
+  const b = req.body || {};
+  if (!b.logType || !b.title) return res.status(400).json({ error: 'logType and title are required' });
+  const result = await db.query(
+    `INSERT INTO athletic_logs (user_id, log_type, title, distance_m, time_seconds, rating, notes, performed_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+    [
+      req.user.userId,
+      b.logType,
+      b.title,
+      b.distanceM || null,
+      b.timeSeconds || null,
+      b.rating || null,
+      b.notes || null,
+      b.performedAt || new Date().toISOString(),
+    ]
+  );
+  res.json(mapAthleticLog(result.rows[0]));
+}));
+
+app.put('/api/athletic/:id', auth, wrap(async (req, res) => {
+  const b = req.body || {};
+  const result = await db.query(
+    `UPDATE athletic_logs
+     SET log_type = $3, title = $4, distance_m = $5, time_seconds = $6, rating = $7, notes = $8, performed_at = $9
+     WHERE id = $1 AND user_id = $2 RETURNING *`,
+    [
+      req.params.id, req.user.userId,
+      b.logType || 'other', b.title || 'Event',
+      b.distanceM || null, b.timeSeconds || null, b.rating || null,
+      b.notes || null, b.performedAt || new Date().toISOString(),
+    ]
+  );
+  if (!result.rows[0]) return res.status(404).json({ error: 'Athletic log not found' });
+  res.json(mapAthleticLog(result.rows[0]));
+}));
+
+app.delete('/api/athletic/:id', auth, wrap(async (req, res) => {
+  await db.query('DELETE FROM athletic_logs WHERE id = $1 AND user_id = $2', [
+    req.params.id, req.user.userId,
+  ]);
+  res.json({ ok: true });
+}));
+
+// ── Coach Memory ─────────────────────────────────────────────────────────────
+
+app.get('/api/coach-memory', auth, wrap(async (req, res) => {
+  const result = await db.query(
+    'SELECT * FROM coach_memory WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50',
+    [req.user.userId]
+  );
+  res.json(result.rows.map(mapCoachMemory));
+}));
+
+app.post('/api/coach-memory', auth, wrap(async (req, res) => {
+  const { factType, description } = req.body || {};
+  if (!factType || !description) return res.status(400).json({ error: 'factType and description are required' });
+  const result = await db.query(
+    'INSERT INTO coach_memory (user_id, fact_type, description) VALUES ($1, $2, $3) RETURNING *',
+    [req.user.userId, factType, description]
+  );
+  res.json(mapCoachMemory(result.rows[0]));
+}));
+
+app.delete('/api/coach-memory/:id', auth, wrap(async (req, res) => {
+  await db.query('DELETE FROM coach_memory WHERE id = $1 AND user_id = $2', [
+    req.params.id, req.user.userId,
+  ]);
+  res.json({ ok: true });
+}));
+
+// ── FIFA-Style Performance Card ──────────────────────────────────────────────
+
+app.get('/api/stats/fifa-card', auth, wrap(async (req, res) => {
+  const userId = req.user.userId;
+
+  // --- PAC: Linear sprint scaling ---
+  // PAC = max(40, min(99, round(99 - (bestTime - 10.5) * 15)))
+  const sprintRes = await db.query(
+    `SELECT MIN(time_seconds) AS best_time, distance_m
+     FROM athletic_logs
+     WHERE user_id = $1 AND log_type = 'sprint' AND time_seconds IS NOT NULL
+     GROUP BY distance_m
+     ORDER BY distance_m DESC LIMIT 2`,
+    [userId]
+  );
+  let pac = 40; // default
+  for (const row of sprintRes.rows) {
+    const t = Number(row.best_time);
+    const d = Number(row.distance_m);
+    // Normalize to 100m equivalent
+    const normalized = d >= 80 ? t * (100 / d) : t;
+    const rating = Math.max(40, Math.min(99, Math.round(99 - (normalized - 10.5) * 15)));
+    if (rating > pac) pac = rating;
+  }
+
+  // --- STR: Brzycki 1RM from workout logs ---
+  // Brzycki: weight / (1.0278 - 0.0278 * reps)
+  const liftRes = await db.query(
+    `SELECT exercise_name,
+            MAX(weight / (1.0278 - 0.0278 * reps)) AS est_1rm
+     FROM (
+       SELECT ex->>'name' AS exercise_name,
+              (s->>'reps')::numeric AS reps,
+              (s->>'weight')::numeric AS weight
+       FROM workout_logs wl,
+            jsonb_array_elements(wl.exercises) AS ex,
+            jsonb_array_elements(ex->'completedSets') AS s
+       WHERE wl.user_id = $1 AND (s->>'weight')::numeric > 0 AND (s->>'reps')::numeric BETWEEN 1 AND 12
+     ) t
+     WHERE exercise_name IN ('Barbell Bench Press', 'Barbell Squat', 'Deadlift')
+     GROUP BY exercise_name`,
+    [userId]
+  );
+  const profileRes = await db.query('SELECT weight FROM user_profiles WHERE user_id = $1', [userId]);
+  const bodyWeight = profileRes.rows[0]?.weight || 75;
+  const totalBig3 = liftRes.rows.reduce((sum, r) => sum + Number(r.est_1rm), 0);
+  // Normalize: 2.5x bodyweight total big3 = 99
+  const str = Math.max(40, Math.min(99, Math.round((totalBig3 / (bodyWeight * 2.5)) * 99)));
+
+  // --- STA: Weekly volume + cardio ---
+  const volumeRes = await db.query(
+    `SELECT COALESCE(SUM(weight * reps), 0) AS total_volume
+     FROM (
+       SELECT (s->>'reps')::numeric AS reps,
+              (s->>'weight')::numeric AS weight
+       FROM workout_logs wl,
+            jsonb_array_elements(wl.exercises) AS ex,
+            jsonb_array_elements(ex->'completedSets') AS s
+       WHERE wl.user_id = $1 AND wl.performed_at >= now() - interval '7 days'
+     ) t`,
+    [userId]
+  );
+  const cardioRes = await db.query(
+    `SELECT COALESCE(SUM(time_seconds / 60.0), 0) AS cardio_minutes
+     FROM athletic_logs
+     WHERE user_id = $1 AND log_type IN ('cardio', 'sprint') AND performed_at >= now() - interval '7 days'`,
+    [userId]
+  );
+  const weeklyVolume = Number(volumeRes.rows[0].total_volume);
+  const cardioMin = Number(cardioRes.rows[0].cardio_minutes);
+  // Normalize: 15000 kg·reps/week + 60 min cardio = 99
+  const sta = Math.max(40, Math.min(99, Math.round(((weeklyVolume / 15000) * 0.7 + (cardioMin / 60) * 0.3) * 99)));
+
+  // --- DRI: Plyo frequency + match ratings ---
+  const plyoRes = await db.query(
+    `SELECT COUNT(*) AS count FROM athletic_logs
+     WHERE user_id = $1 AND log_type = 'plyo' AND performed_at >= now() - interval '30 days'`,
+    [userId]
+  );
+  const matchRes = await db.query(
+    `SELECT AVG(rating) AS avg_rating FROM athletic_logs
+     WHERE user_id = $1 AND log_type = 'match' AND rating IS NOT NULL
+     ORDER BY performed_at DESC LIMIT 5`,
+    [userId]
+  );
+  const plyoCount = Number(plyoRes.rows[0].count);
+  const avgMatchRating = matchRes.rows[0]?.avg_rating ? Number(matchRes.rows[0].avg_rating) : 0;
+  // Match rating (0-10) → 0-99, with plyo bonus (up to +10)
+  const matchComponent = avgMatchRating > 0 ? (avgMatchRating / 10) * 89 : 40;
+  const plyoBonus = Math.min(10, plyoCount);
+  const dri = Math.max(40, Math.min(99, Math.round(matchComponent + plyoBonus)));
+
+  // --- OVR: Weighted average ---
+  const ovr = Math.round(0.2 * pac + 0.35 * str + 0.25 * sta + 0.2 * dri);
+
+  res.json({
+    ovr, pac, str, sta, dri,
+    details: {
+      bestSprint: sprintRes.rows.length > 0 ? { time: Number(sprintRes.rows[0].best_time), distance: Number(sprintRes.rows[0].distance_m) } : null,
+      big3Total: Math.round(totalBig3),
+      weeklyVolume: Math.round(weeklyVolume),
+      cardioMinutes: Math.round(cardioMin),
+      bodyWeight,
+    },
+  });
+}));
+
+// ── Video Scouting ───────────────────────────────────────────────────────────
+// Receives base64 keyframes + context, analyzes via LLM, returns stat deltas.
+
+app.post('/api/coach/scout', auth, wrap(async (req, res) => {
+  const { frames, context, drillType } = req.body || {};
+  if (!frames || !Array.isArray(frames) || frames.length === 0) {
+    return res.status(400).json({ error: 'frames array (base64 images) is required' });
+  }
+
+  // Build the scout prompt
+  const scoutPrompt = `You are a professional football/soccer scout analyzing video keyframes from a training session or match.
+Drill type: ${drillType || 'general'}
+Context: ${context || 'No additional context'}
+
+Analyze the athlete's:
+- Explosive acceleration and top speed (PAC)
+- Body strength and balance during contact (STR)
+- Endurance and work rate indicators (STA)
+- Ball control, dribbling technique, agility (DRI)
+
+These keyframes were captured at peak movement phases (ball contact, maximum knee bend, sprint acceleration).
+
+Return ONLY a JSON object:
+{
+  "pac_delta": <integer -5 to +5>,
+  "str_delta": <integer -5 to +5>,
+  "sta_delta": <integer -5 to +5>,
+  "dri_delta": <integer -5 to +5>,
+  "scout_comment": "<2-3 sentence professional scout assessment>",
+  "highlights": ["<key observation 1>", "<key observation 2>"]
+}`;
+
+  // For now, store the request metadata and return a placeholder.
+  // The actual LLM vision call will be wired in Wave 6 frontend.
+  // This route validates the contract and saves the scout report to coach_memory.
+  await db.query(
+    'INSERT INTO coach_memory (user_id, fact_type, description) VALUES ($1, $2, $3)',
+    [req.user.userId, 'scout_report', `Video scouting analysis requested for ${drillType || 'general'} drill with ${frames.length} keyframes`]
+  );
+
+  res.json({
+    pac_delta: 0, str_delta: 0, sta_delta: 0, dri_delta: 0,
+    scout_comment: 'Video scouting endpoint ready. LLM vision analysis will be connected in Wave 6.',
+    highlights: [],
+    _prompt: scoutPrompt, // Expose prompt for frontend to call Groq directly if needed
+  });
 }));
 
 // ── Fallback ─────────────────────────────────────────────────────────────────
